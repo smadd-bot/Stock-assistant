@@ -1,0 +1,6 @@
+streamlit
+yfinance
+pandas
+plotly
+pytrends
+urllib3<2.0.0
