@@ -170,10 +170,8 @@ def analyze_sector_strength(stock_info, stock_hist):
     if sector_etf_hist.empty:
         return None
 
-    # Calculate RSI (using custom pandas function)
-    stock_hist['RSI'] = calculate_rsi(stock_hist['Close'], period=14)
+    # RSI is now pre-calculated on the main hist df
     sector_etf_hist['RSI'] = calculate_rsi(sector_etf_hist['Close'], period=14)
-
     stock_rsi = stock_hist['RSI'].iloc[-1]
     sector_rsi = sector_etf_hist['RSI'].iloc[-1]
 
@@ -208,7 +206,7 @@ def evaluate_trade_setup(stock_hist, sector_analysis, stock_info):
     current_vol = stock_hist['Volume'].iloc[-1]
     
     ma50 = stock_hist['MA50'].iloc[-1]
-    ma150 = stock_hist['MA150'].iloc[-1]
+    ma200 = stock_hist['MA200'].iloc[-1]
     vol_ma20 = stock_hist['Vol_MA20'].iloc[-1]
 
     past_50 = stock_hist['Close'][:-1].tail(50)
@@ -225,7 +223,7 @@ def evaluate_trade_setup(stock_hist, sector_analysis, stock_info):
         "Manageable Debt (Debt to Equity < 100%)": de is not None and de <= 100,
         "Price broke out above 50-Day Resistance": current_price > resistance_50d,
         "Price is above 50-Day Moving Average": current_price > ma50,
-        "Price is above 150-Day Moving Average": current_price > ma150,
+        "Price is above 200-Day Moving Average": current_price > ma200,
         "Significant Volume (Today's Vol > 1.5x 20-Day Avg)": current_vol > (vol_ma20 * 1.5),
         "Sector Tailwind (Stock Momentum > Sector ETF)": sector_analysis['stock_rsi'] > sector_analysis['sector_rsi'] if sector_analysis else False
     }
@@ -259,7 +257,7 @@ def generate_swot(info, hist, sector_analysis):
     # Strengths
     if info.get('returnOnEquity', 0) and info.get('returnOnEquity', 0) > 0.15: swot['Strengths'].append("Strong Return on Equity (>15%)")
     if info.get('profitMargins', 0) and info.get('profitMargins', 0) > 0.10: swot['Strengths'].append("Healthy Profit Margins (>10%)")
-    if hist['Close'].iloc[-1] > hist['MA150'].iloc[-1]: swot['Strengths'].append("Long-term price trend is bullish (Price > 150D MA)")
+    if hist['Close'].iloc[-1] > hist['MA200'].iloc[-1]: swot['Strengths'].append("Long-term price trend is bullish (Price > 200D MA)")
 
     # Weaknesses
     if info.get('debtToEquity', 0) and info.get('debtToEquity', 0) > 150: swot['Weaknesses'].append("High Debt-to-Equity ratio (>150%)")
@@ -282,18 +280,22 @@ def generate_swot(info, hist, sector_analysis):
         
     return swot
 
-def plot_chart(df, ticker_symbol):
+def plot_chart(df, ticker_symbol, selected_indicators=[]):
     """Creates an interactive Plotly chart with Price, MAs, Volume, and Volume Profile."""
+    # Dynamically adjust rows and heights based on selected indicators
+    rows = 2 + ("MACD" in selected_indicators) + ("RSI" in selected_indicators)
+    row_heights = [0.6, 0.2] + ([0.1] * (rows - 2))
+    specs = [[{}, {}]] + [[{}, None]] * (rows - 1)
+
     fig = make_subplots(
-        rows=2, cols=2,
+        rows=rows, cols=2,
         shared_xaxes=True,
         shared_yaxes=True,
-        vertical_spacing=0.03,
+        vertical_spacing=0.02,
         horizontal_spacing=0.0,
         column_widths=[0.85, 0.15],
-        row_heights=[0.8, 0.2],
-        specs=[[{}, {}],
-               [{}, None]]
+        row_heights=row_heights,
+        specs=specs
     )
 
     # Find missing dates to perfectly remove gaps (weekends, holidays)
@@ -310,20 +312,28 @@ def plot_chart(df, ticker_symbol):
                                  low=df['Low'], close=df['Close'], name='Price'),
                   row=1, col=1)
 
-    # 20-Day Moving Average
+    # 20-Day Moving Average (base for BBands)
     fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], name='MA20',
                              line=dict(color='skyblue', width=1.5)),
                   row=1, col=1)
 
-    # 50-Day Moving Average
+    # 50 & 200 Day Moving Averages
     fig.add_trace(go.Scatter(x=df.index, y=df['MA50'], name='MA50',
                              line=dict(color='orange', width=1.5)),
                   row=1, col=1)
-                  
-    # 150-Day Moving Average
-    fig.add_trace(go.Scatter(x=df.index, y=df['MA150'], name='MA150',
-                             line=dict(color='purple', width=1.5, dash='dot')),
+    fig.add_trace(go.Scatter(x=df.index, y=df['MA200'], name='MA200',
+                             line=dict(color='violet', width=1.5, dash='dot')),
                   row=1, col=1)
+                  
+    # Bollinger Bands
+    if "Bollinger Bands" in selected_indicators and 'Upper_BB' in df.columns and 'Lower_BB' in df.columns:
+        fig.add_trace(go.Scatter(x=df.index, y=df['Upper_BB'], name='Upper BB',
+                                 line=dict(color='gray', width=1, dash='dot')),
+                      row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['Lower_BB'], name='Lower BB',
+                                 line=dict(color='gray', width=1, dash='dot'),
+                                 fill='tonexty', fillcolor='rgba(128,128,128,0.1)'),
+                      row=1, col=1)
 
     # 50-day Support & Resistance Lines
     past_50 = df['Close'][:-1].tail(50)
@@ -352,26 +362,55 @@ def plot_chart(df, ticker_symbol):
     fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='Volume', marker_color='rgba(100,100,100,0.5)'),
                   row=2, col=1)
 
+    # --- Row 3, Col 1: MACD ---
+    if "MACD" in selected_indicators:
+        macd_row = 3
+        fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], name='MACD', line=dict(color='#007bff', width=1.5)), row=macd_row, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['MACD_signal'], name='Signal', line=dict(color='#ff8800', width=1.5, dash='dot')), row=macd_row, col=1)
+        colors = ['#00C851' if val >= 0 else '#ff4444' for val in df['MACD_hist']]
+        fig.add_trace(go.Bar(x=df.index, y=df['MACD_hist'], name='Histogram', marker_color=colors), row=macd_row, col=1)
+        fig.update_yaxes(title_text="MACD", row=macd_row, col=1)
+
+    # --- Row 4, Col 1: RSI ---
+    if "RSI" in selected_indicators:
+        rsi_row = 3 + ("MACD" in selected_indicators)
+        fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], name='RSI', line=dict(color='magenta', width=1.5)), row=rsi_row, col=1)
+        # Add overbought/oversold regions and lines
+        fig.add_hrect(y0=70, y1=100, line_width=0, fillcolor="red", opacity=0.1, row=rsi_row, col=1)
+        fig.add_hrect(y0=0, y1=30, line_width=0, fillcolor="green", opacity=0.1, row=rsi_row, col=1)
+        fig.add_hline(y=70, line_dash="dash", line_color="red", opacity=0.5, row=rsi_row, col=1)
+        fig.add_hline(y=30, line_dash="dash", line_color="green", opacity=0.5, row=rsi_row, col=1)
+        fig.update_yaxes(title_text="RSI", row=rsi_row, col=1, range=[0, 100])
+
     # --- Layout Updates ---
     fig.update_layout(
-        title_text=f'{ticker_symbol} Daily Chart with Volume Profile',
         xaxis_rangeslider_visible=False,
         showlegend=False,
-        hovermode='x unified', # Enables the vertical hover line
+        hovermode='y unified', # Enables horizontal hover line for price-level analysis
         margin=dict(l=20, r=20, t=40, b=20),
-        height=800 # Increased height to make the chart more square
+        height=800, # Increased height to make the chart more square
+        yaxis1_autorange=True,
+        yaxis1_showticklabels=True,
+        yaxis2_showticklabels=False,
+        dragmode='pan' # Sets the default mouse interaction to pan instead of zoom
     )
-    # Apply rangebreaks to flawlessly hide weekends and holidays without breaking Candlestick
+
+    # Apply rangebreaks and manage x-axis labels
     fig.update_xaxes(
         rangebreaks=[dict(values=missing_dates)],
-        showticklabels=False, # Hides x-axis dates, reliant on hover for cleaner UI
         col=1 # Crucial: Only apply to the time-series charts, not the Volume Profile
     )
+
+    # Hide all x-axis labels initially for a clean look
+    for i in range(1, rows + 1):
+        fig.update_xaxes(showticklabels=False, row=i, col=1)
+
+    # Show labels only for the last visible row
+    fig.update_xaxes(showticklabels=True, row=rows, col=1)
 
     # Update axes titles and visibility
     fig.update_yaxes(title_text="Price (USD)", row=1, col=1)
     fig.update_yaxes(title_text="Volume", row=2, col=1)
-    fig.update_yaxes(showticklabels=False, row=1, col=2) # Hide y-axis labels on profile
     fig.update_xaxes(showticklabels=False, title_text="", row=1, col=2) # Hide x-axis on profile
 
     return fig
@@ -440,8 +479,20 @@ with tab_breakout:
             # --- Calculate Indicators ---
             hist['MA20'] = hist['Close'].rolling(window=20).mean()
             hist['MA50'] = hist['Close'].rolling(window=50).mean()
-            hist['MA150'] = hist['Close'].rolling(window=150).mean()
+            hist['MA200'] = hist['Close'].rolling(window=200).mean()
             hist['Vol_MA20'] = hist['Volume'].rolling(window=20).mean()
+            # Bollinger Bands
+            hist['20dSTD'] = hist['Close'].rolling(window=20).std()
+            hist['Upper_BB'] = hist['MA20'] + (hist['20dSTD'] * 2)
+            hist['Lower_BB'] = hist['MA20'] - (hist['20dSTD'] * 2)
+            # MACD
+            exp12 = hist['Close'].ewm(span=12, adjust=False).mean()
+            exp26 = hist['Close'].ewm(span=26, adjust=False).mean()
+            hist['MACD'] = exp12 - exp26
+            hist['MACD_signal'] = hist['MACD'].ewm(span=9, adjust=False).mean()
+            hist['MACD_hist'] = hist['MACD'] - hist['MACD_signal']
+            # RSI
+            hist['RSI'] = calculate_rsi(hist['Close'])
             
             # --- Calculate Performance Metrics ---
             price_today = hist['Close'].iloc[-1]
@@ -483,8 +534,44 @@ with tab_breakout:
 
             st.markdown("---")
 
-            # Display the main chart
-            st.plotly_chart(plot_chart(hist, ticker_symbol), use_container_width=True)
+            # Display the main chart with a custom Streamlit header and inline toggle
+            st.subheader(f"📊 {ticker_symbol} Daily Chart & Volume Profile")
+            
+            # Golden/Death Cross Analysis
+            if len(hist) >= 200 and not pd.isna(hist['MA200'].iloc[-1]):
+                ma50_today = hist['MA50'].iloc[-1]
+                ma200_today = hist['MA200'].iloc[-1]
+                ma50_prev = hist['MA50'].iloc[-5] # Compare vs 5 days ago for trend
+                ma200_prev = hist['MA200'].iloc[-5]
+
+                # Calculate the signed gap (not absolute) to determine convergence/divergence
+                gap_today = ma50_today - ma200_today
+                gap_prev = ma50_prev - ma200_prev
+
+                # Determine current state and which cross is next
+                if gap_today > 0: # Currently in a "Golden Cross" state (50MA > 200MA)
+                    cross_type = "Death"
+                    direction = "moving towards" if gap_today < gap_prev else "moving away from"
+                else: # Currently in a "Death Cross" state (50MA < 200MA)
+                    cross_type = "Golden"
+                    direction = "moving towards" if gap_today > gap_prev else "moving away from"
+
+                st.markdown(f"*(Looking at todays MA, it is {direction} a **{cross_type}** cross)*")
+                st.caption("This compares the gap between the 50 & 200-day moving averages today vs. 5 days ago to determine if they are converging or diverging.")
+
+            indicator_options = ["Bollinger Bands", "MACD", "RSI"]
+            selected_indicators = st.multiselect(
+                "Add Indicators",
+                indicator_options,
+                default=[],
+                help="Select technical indicators to overlay on the chart."
+            )
+                
+            st.plotly_chart(
+                plot_chart(hist, ticker_symbol, selected_indicators), 
+                use_container_width=True,
+                config={'scrollZoom': True, 'displaylogo': False} # Enables mouse-wheel zoom
+            )
 
             # Main content in tabs below the chart
             perf_tab, opts_tab, sector_tab, swot_tab, pop_tab = st.tabs(["📈 Performance", "📊 Options Flow", "Sector Comparison", "🧩 SWOT Analysis", "🔥 Popularity"])
@@ -583,30 +670,30 @@ with tab_breakout:
                     if rev_growth is not None:
                         rg_rating = "🟢 Excellent" if rev_growth >= 0.20 else ("🟡 Fair" if rev_growth > 0 else "🔴 Poor")
                         st.metric("Revenue Growth (YoY)", f"{rev_growth*100:.2f}%")
-                        st.caption(f"{rg_rating}: Top-line sales growth.")
+                        st.caption(f"{rg_rating}: Top-line sales growth (Most recent quarter vs same quarter last year).")
                     else:
-                        st.metric("Revenue Growth", "N/A")
+                        st.metric("Revenue Growth (YoY)", "N/A")
                 with i_col2:
                     if earn_growth is not None:
                         eg_rating = "🟢 Excellent" if earn_growth >= 0.15 else ("🟡 Fair" if earn_growth > 0 else "🔴 Poor")
                         st.metric("Earnings Growth (YoY)", f"{earn_growth*100:.2f}%")
-                        st.caption(f"{eg_rating}: Bottom-line EPS growth.")
+                        st.caption(f"{eg_rating}: Bottom-line EPS growth (Most recent quarter vs same quarter last year).")
                     else:
-                        st.metric("Earnings Growth", "N/A")
+                        st.metric("Earnings Growth (YoY)", "N/A")
                 with i_col3:
                     if gross_margin is not None:
                         gm_rating = "🟢 Excellent" if gross_margin >= 0.50 else ("🟡 Fair" if gross_margin >= 0.30 else "🔴 Poor")
-                        st.metric("Gross Margin", f"{gross_margin*100:.2f}%")
-                        st.caption(f"{gm_rating}: Profitability after direct costs.")
+                        st.metric("Gross Margin (TTM)", f"{gross_margin*100:.2f}%")
+                        st.caption(f"{gm_rating}: Profitability after direct costs over the Trailing Twelve Months.")
                     else:
-                        st.metric("Gross Margin", "N/A")
+                        st.metric("Gross Margin (TTM)", "N/A")
                 with i_col4:
                     if op_margin is not None:
                         om_rating = "🟢 Excellent" if op_margin >= 0.15 else ("🟡 Fair" if op_margin > 0 else "🔴 Poor")
-                        st.metric("Operating Margin", f"{op_margin*100:.2f}%")
-                        st.caption(f"{om_rating}: Profitability after operating expenses.")
+                        st.metric("Operating Margin (TTM)", f"{op_margin*100:.2f}%")
+                        st.caption(f"{om_rating}: Profitability after operating expenses over the Trailing Twelve Months.")
                     else:
-                        st.metric("Operating Margin", "N/A")
+                        st.metric("Operating Margin (TTM)", "N/A")
                         
                 # Rule of 40 calculation
                 if rev_growth is not None and op_margin is not None:
