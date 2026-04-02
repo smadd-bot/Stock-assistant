@@ -25,19 +25,23 @@ WATCHLIST = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA', 'META']
 @st.cache_data(ttl="15m")
 def get_stock_data(ticker_symbol):
     """Fetches stock data (info and history) from yfinance."""
-    ticker = yf.Ticker(ticker_symbol)
-    info = ticker.info
-    # Fetch 1 year of historical data for analysis
-    hist = ticker.history(period="1y")
-    if hist.empty:
+    try:
+        ticker = yf.Ticker(ticker_symbol)
+        info = ticker.info
+        # Fetch 1 year of historical data for analysis
+        hist = ticker.history(period="1y")
+        if hist.empty:
+            return None, None
+        return info, hist
+    except Exception as e:
+        print(f"yfinance Rate Limit or Error for {ticker_symbol}: {e}")
         return None, None
-    return info, hist
 
 @st.cache_data(ttl="15m")
 def get_options_data(ticker_symbol):
     """Fetches options chain data (calls and puts) for the nearest expiry."""
-    ticker = yf.Ticker(ticker_symbol)
     try:
+        ticker = yf.Ticker(ticker_symbol)
         # Get the nearest expiration date
         nearest_expiry = ticker.options[0]
         opts = ticker.option_chain(nearest_expiry)
@@ -45,6 +49,9 @@ def get_options_data(ticker_symbol):
         return opts.calls, opts.puts
     except IndexError:
         # Ticker might not have options
+        return None, None
+    except Exception as e:
+        print(f"yfinance Options Error for {ticker_symbol}: {e}")
         return None, None
 
 # --- Logic Layer ---
@@ -155,7 +162,10 @@ def analyze_sector_strength(stock_info, stock_hist):
         return None
 
     sector_etf_symbol = SECTOR_ETF_MAP[sector]
-    sector_etf_hist = yf.Ticker(sector_etf_symbol).history(period="1y")
+    try:
+        sector_etf_hist = yf.Ticker(sector_etf_symbol).history(period="1y")
+    except Exception:
+        return None
 
     if sector_etf_hist.empty:
         return None
